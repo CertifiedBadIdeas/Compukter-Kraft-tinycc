@@ -7463,7 +7463,11 @@ again:
         skip(';');
 
     } else if (t == TOK_ASM1 || t == TOK_ASM2 || t == TOK_ASM3) {
+#ifdef TCC_TARGET_K16
+        tcc_error("K16 TinyCC does not support integrated assembly");
+#else
         asm_instr();
+#endif
 
     } else {
         if (tok == ':' && t >= TOK_UIDENT) {
@@ -8771,7 +8775,11 @@ static int decl(int l)
                 break;
             if (tok == TOK_ASM1 || tok == TOK_ASM2 || tok == TOK_ASM3) {
                 /* global asm block */
+#ifdef TCC_TARGET_K16
+                tcc_error("K16 TinyCC does not support integrated assembly");
+#else
                 asm_global_instr();
+#endif
                 continue;
             }
             if (tok >= TOK_UIDENT) {

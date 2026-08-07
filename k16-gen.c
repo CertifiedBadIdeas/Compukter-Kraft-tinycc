@@ -71,6 +71,26 @@ static void k16_unimplemented(const char *feature)
     tcc_error("K16 TinyCC backend does not support %s yet", feature);
 }
 
+static void k16_reject_float(void)
+{
+    tcc_error("K16 TinyCC does not support floating-point code yet");
+}
+
+static void k16_reject_varargs(void)
+{
+    tcc_error("K16 TinyCC does not support variadic functions yet");
+}
+
+static void k16_reject_wide(void)
+{
+    tcc_error("K16 TinyCC does not support values wider than one 32-bit ABI slot yet");
+}
+
+static void k16_reject_aggregate(void)
+{
+    tcc_error("K16 TinyCC does not support aggregate arguments or returns yet");
+}
+
 ST_FUNC void o(unsigned int word)
 {
     int next = ind + 2;
@@ -251,9 +271,9 @@ ST_FUNC void load(int r, SValue *sv)
     int align, size, base, offset;
 
     if (is_float(bt))
-        k16_unimplemented("floating-point values");
+        k16_reject_float();
     if (bt == VT_LLONG || bt == VT_STRUCT)
-        k16_unimplemented("values wider than one 32-bit scalar");
+        k16_reject_wide();
     if (sv->r & VT_LVAL) {
         size = type_size(&sv->type, &align);
         if (bt == VT_PTR || bt == VT_FUNC)
@@ -313,7 +333,7 @@ ST_FUNC void store(int r, SValue *sv)
     int bt = sv->type.t & VT_BTYPE;
     int align, size, base, offset;
     if (is_float(bt))
-        k16_unimplemented("floating-point values");
+        k16_reject_float();
     size = type_size(&sv->type, &align);
     if (bt == VT_PTR || bt == VT_FUNC)
         size = PTR_SIZE;
@@ -331,13 +351,13 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret,
     int size = type_size(vt, &align);
     int bt = vt->t & VT_BTYPE;
     if (variadic)
-        k16_unimplemented("variadic functions");
+        k16_reject_varargs();
     if (is_float(bt))
-        k16_unimplemented("floating-point returns");
+        k16_reject_float();
     if (bt == VT_STRUCT)
-        k16_unimplemented("aggregate returns");
+        k16_reject_aggregate();
     if (size > 4)
-        k16_unimplemented("returns wider than one 32-bit ABI slot");
+        k16_reject_wide();
     ret->t = VT_INT;
     ret->ref = NULL;
     *ret_align = 1;
@@ -353,17 +373,17 @@ ST_FUNC void gfunc_call(int nb_args)
     int i, r;
 
     if (func->type.ref && func->type.ref->f.func_type == FUNC_ELLIPSIS)
-        k16_unimplemented("variadic calls");
+        k16_reject_varargs();
     for (i = 0; i < nb_args; ++i) {
         SValue *arg = &vtop[-nb_args + 1 + i];
         int bt = arg->type.t & VT_BTYPE;
         int align, size = type_size(&arg->type, &align);
         if (is_float(bt))
-            k16_unimplemented("floating-point call arguments");
+            k16_reject_float();
         if (bt == VT_STRUCT)
-            k16_unimplemented("aggregate call arguments");
+            k16_reject_aggregate();
         if (size > 4)
-            k16_unimplemented("call arguments wider than one 32-bit ABI slot");
+            k16_reject_wide();
     }
 
     save_regs(0);
@@ -401,7 +421,7 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
     Sym *param = func_sym->type.ref;
     int index = 0;
     if (func_var)
-        k16_unimplemented("variadic functions");
+        k16_reject_varargs();
     loc = 0;
     func_prolog_offset = ind;
     ind += 14;
@@ -410,11 +430,11 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
         int align, size = type_size(&param->type, &align);
         int address;
         if (is_float(bt))
-            k16_unimplemented("floating-point parameters");
+            k16_reject_float();
         if (bt == VT_STRUCT)
-            k16_unimplemented("aggregate parameters");
+            k16_reject_aggregate();
         if (size > 4)
-            k16_unimplemented("parameters wider than one 32-bit ABI slot");
+            k16_reject_wide();
         if (index < 3) {
             loc -= 4;
             address = loc;
@@ -611,10 +631,10 @@ ST_FUNC void gen_opi(int op)
         break;
     }
 }
-ST_FUNC void gen_opf(int op) { (void)op; k16_unimplemented("floating-point operators"); }
-ST_FUNC void gen_cvt_ftoi(int t) { (void)t; k16_unimplemented("floating-point conversions"); }
-ST_FUNC void gen_cvt_itof(int t) { (void)t; k16_unimplemented("floating-point conversions"); }
-ST_FUNC void gen_cvt_ftof(int t) { (void)t; k16_unimplemented("floating-point conversions"); }
+ST_FUNC void gen_opf(int op) { (void)op; k16_reject_float(); }
+ST_FUNC void gen_cvt_ftoi(int t) { (void)t; k16_reject_float(); }
+ST_FUNC void gen_cvt_itof(int t) { (void)t; k16_reject_float(); }
+ST_FUNC void gen_cvt_ftof(int t) { (void)t; k16_reject_float(); }
 ST_FUNC void ggoto(void) { k16_unimplemented("computed goto"); }
 ST_FUNC void gen_vla_sp_save(int addr) { (void)addr; k16_unimplemented("variable-length arrays"); }
 ST_FUNC void gen_vla_sp_restore(int addr) { (void)addr; k16_unimplemented("variable-length arrays"); }

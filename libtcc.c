@@ -1238,6 +1238,11 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
     if (0 == (flags & AFF_TYPE_MASK))
         flags |= guess_filetype(filename);
 
+#ifdef TCC_TARGET_K16
+    if (flags & (AFF_TYPE_ASM | AFF_TYPE_ASMPP))
+        return tcc_error_noabort("K16 TinyCC does not support integrated assembly");
+#endif
+
     /* ignore binary files with -E */
     if (s1->output_type == TCC_OUTPUT_PREPROCESS
         && (flags & AFF_TYPE_BIN))
@@ -2039,7 +2044,9 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *pargc, char ***pargv)
             s->nostdlib = 1;
             break;
         case TCC_OPTION_run:
-#ifdef TCC_IS_NATIVE
+#ifdef TCC_TARGET_K16
+            return tcc_error_noabort("K16 TinyCC is a cross-compiler; -run is unavailable");
+#elif defined TCC_IS_NATIVE
             /* When from script "#!/usr/bin/tcc -run <options>",
                argv[1] is "-run <options>" and argv[2] is <script-name> */
             run = optarg;
