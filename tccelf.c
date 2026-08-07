@@ -50,6 +50,9 @@ struct sym_version {
 #ifdef TCC_TARGET_PE
 #define shf_RELRO SHF_ALLOC
 static const char rdata[] = ".rdata";
+#elif defined TCC_TARGET_K16
+#define shf_RELRO SHF_ALLOC
+static const char rdata[] = ".rodata";
 #else
 #define shf_RELRO SHF_ALLOC /* eventually made SHF_WRITE in sort_sections() */
 static const char rdata[] = ".data.ro";
