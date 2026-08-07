@@ -65,7 +65,12 @@ ST_FUNC void tccelf_new(TCCState *s)
     dynarray_add(&s->sections, &s->nb_sections, NULL);
 
     /* create standard sections */
+#ifdef TCC_TARGET_K16
+    text_section = new_section(s, ".text.k16", SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR);
+    text_section->sh_addralign = 2;
+#else
     text_section = new_section(s, ".text", SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR);
+#endif
     data_section = new_section(s, ".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE);
     /* create ro data section (make ro after relocation done with GNU_RELRO) */
     rodata_section = new_section(s, rdata, SHT_PROGBITS, shf_RELRO);
@@ -1817,7 +1822,7 @@ ST_FUNC void tccelf_add_crtend(TCCState *s1)
 }
 #endif /* TCC_TARGET_UNIX */
 
-#ifndef TCC_TARGET_PE
+#if !defined(TCC_TARGET_PE) && !defined(TCC_TARGET_K16)
 /* add tcc runtime libraries */
 ST_FUNC void tcc_add_runtime(TCCState *s1)
 {
@@ -1873,7 +1878,12 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
 #endif
     }
 }
-#endif /* ndef TCC_TARGET_PE */
+#elif defined TCC_TARGET_K16
+ST_FUNC void tcc_add_runtime(TCCState *s1)
+{
+    tcc_error_noabort("K16 TinyCC backend does not support in-memory execution");
+}
+#endif /* target runtime */
 
 /* set _etext/_edata/_end  f=0:set  f=1:when_needed  f=2,3:just_update */
 static void set_linker_sym(TCCState *s1, const char *name, Section *sec, int f)
@@ -3208,6 +3218,9 @@ static int elf_output_obj(TCCState *s1, const char *filename)
 
 LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
 {
+#ifdef TCC_TARGET_K16
+    TCCState *s1 = s;
+#endif
     s->nb_errors = 0;
     if (s->test_coverage)
         tcc_tcov_add_file(s, filename);
@@ -3217,6 +3230,10 @@ LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
     return  pe_output_file(s, filename);
 #elif defined TCC_TARGET_MACHO
     return macho_output_file(s, filename);
+#elif defined TCC_TARGET_K16
+    tcc_error_noabort("K16 TinyCC backend only supports relocatable object output (-c)");
+    tcc_exit_state(s1);
+    return -1;
 #else
     return elf_output_file(s, filename);
 #endif

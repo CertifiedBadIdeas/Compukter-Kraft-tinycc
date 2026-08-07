@@ -158,11 +158,13 @@ extern long double strtold (const char *__nptr, char **__endptr);
 /* #define TCC_TARGET_ARM64  *//* ARMv8 code generator */
 /* #define TCC_TARGET_C67    *//* TMS320C67xx code generator */
 /* #define TCC_TARGET_RISCV64 *//* risc-v code generator */
+/* #define TCC_TARGET_K16     *//* KraftOS K16 code generator */
 
 /* default target is I386 */
 #if !defined(TCC_TARGET_I386) && !defined(TCC_TARGET_ARM) && \
     !defined(TCC_TARGET_ARM64) && !defined(TCC_TARGET_C67) && \
-    !defined(TCC_TARGET_X86_64) && !defined(TCC_TARGET_RISCV64)
+    !defined(TCC_TARGET_X86_64) && !defined(TCC_TARGET_RISCV64) && \
+    !defined(TCC_TARGET_K16)
 # if defined __x86_64__
 #  define TCC_TARGET_X86_64
 # elif defined __arm__
@@ -224,11 +226,11 @@ extern long double strtold (const char *__nptr, char **__endptr);
     || defined TARGETOS_NetBSD \
     || defined TARGETOS_FreeBSD_kernel
 # define TARGETOS_BSD 1
-#elif !(defined TCC_TARGET_PE || defined TCC_TARGET_MACHO)
+#elif !(defined TCC_TARGET_PE || defined TCC_TARGET_MACHO || defined TCC_TARGET_K16)
 # define TARGETOS_Linux 1 /* for tccdefs_.h */
 #endif
 
-#if defined TCC_TARGET_PE || defined TCC_TARGET_MACHO
+#if defined TCC_TARGET_PE || defined TCC_TARGET_MACHO || defined TCC_TARGET_K16
 # define ELF_OBJ_ONLY /* create elf .o but native executables */
 #else
 # define TCC_TARGET_UNIX 1
@@ -387,6 +389,9 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # include "riscv64-gen.c"
 # include "riscv64-link.c"
 # include "riscv64-asm.c"
+#elif defined(TCC_TARGET_K16)
+# include "k16-gen.c"
+# include "k16-link.c"
 #else
 #error unknown target
 #endif
@@ -405,9 +410,15 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # define ELFCLASSW ELFCLASS32
 # define ElfW(type) Elf##32##_##type
 # define ELFW(type) ELF##32##_##type
+# ifdef TCC_TARGET_K16
+# define ElfW_Rel ElfW(Rela)
+# define SHT_RELX SHT_RELA
+# define REL_SECTION_FMT ".rela%s"
+# else
 # define ElfW_Rel ElfW(Rel)
 # define SHT_RELX SHT_REL
 # define REL_SECTION_FMT ".rel%s"
+# endif
 #endif
 /* target address type */
 #define addr_t ElfW(Addr)

@@ -53,6 +53,9 @@
 #include "riscv64-gen.c"
 #include "riscv64-link.c"
 #include "riscv64-asm.c"
+#elif defined(TCC_TARGET_K16)
+#include "k16-gen.c"
+#include "k16-link.c"
 #else
 #error unknown target
 #endif
@@ -964,6 +967,9 @@ LIBTCCAPI void tcc_delete(TCCState *s1)
 
 LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
 {
+#ifdef TCC_TARGET_K16
+    TCCState *s1 = s;
+#endif
 #ifdef CONFIG_TCC_PIE
     if (output_type == TCC_OUTPUT_EXE)
         output_type |= TCC_OUTPUT_DYN;
@@ -1003,6 +1009,10 @@ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
 # ifdef TCC_IS_NATIVE
     tcc_add_macos_sdkpath(s);
 # endif
+
+#elif defined TCC_TARGET_K16
+    tcc_error_noabort("K16 TinyCC backend only supports relocatable object output (-c)");
+    tcc_exit_state(s1);
 
 #else
     /* paths for crt objects */
@@ -1773,34 +1783,38 @@ static int set_flag(TCCState *s, const FlagDef *flags, const char *name)
 
 static const char dumpmachine_str[] =
 /* this is a best guess, please refine as necessary */
-#ifdef TCC_TARGET_I386
-    "i386-pc"
-#elif defined TCC_TARGET_X86_64
-    "x86_64-pc"
-#elif defined TCC_TARGET_C67
-    "c67"
-#elif defined TCC_TARGET_ARM
-    "arm"
-#elif defined TCC_TARGET_ARM64
-    "aarch64"
-#elif defined TCC_TARGET_RISCV64
-    "riscv64"
-#endif
-    "-"
-#ifdef TCC_TARGET_PE
-    "mingw32"
-#elif defined(TCC_TARGET_MACHO)
-    "apple-darwin"
-#elif TARGETOS_FreeBSD || TARGETOS_FreeBSD_kernel
-    "freebsd"
-#elif TARGETOS_OpenBSD
-    "openbsd"
-#elif TARGETOS_NetBSD
-    "netbsd"
-#elif CONFIG_TCC_MUSL
-    "linux-musl"
+#ifdef TCC_TARGET_K16
+    "k16-unknown-kraftos"
 #else
+# ifdef TCC_TARGET_I386
+    "i386-pc"
+# elif defined TCC_TARGET_X86_64
+    "x86_64-pc"
+# elif defined TCC_TARGET_C67
+    "c67"
+# elif defined TCC_TARGET_ARM
+    "arm"
+# elif defined TCC_TARGET_ARM64
+    "aarch64"
+# elif defined TCC_TARGET_RISCV64
+    "riscv64"
+# endif
+    "-"
+# ifdef TCC_TARGET_PE
+    "mingw32"
+# elif defined(TCC_TARGET_MACHO)
+    "apple-darwin"
+# elif TARGETOS_FreeBSD || TARGETOS_FreeBSD_kernel
+    "freebsd"
+# elif TARGETOS_OpenBSD
+    "openbsd"
+# elif TARGETOS_NetBSD
+    "netbsd"
+# elif CONFIG_TCC_MUSL
+    "linux-musl"
+# else
     "linux-gnu"
+# endif
 #endif
 ;
 

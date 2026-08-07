@@ -192,8 +192,12 @@ static const char version[] =
         "AArch64"
 #elif defined TCC_TARGET_RISCV64
         "riscv64"
+#elif defined TCC_TARGET_K16
+        "K16"
 #endif
-#ifdef TCC_TARGET_PE
+#ifdef TCC_TARGET_K16
+        " KraftOS"
+#elif defined(TCC_TARGET_PE)
         " Windows"
 #elif defined(TCC_TARGET_MACHO)
         " Darwin"

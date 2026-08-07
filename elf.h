@@ -276,6 +276,7 @@ typedef struct
 
 #define EM_ALPHA	0x9026
 #define EM_C60		0x9c60
+#define EM_K16          0x5258
 
 /* Legal values for e_version (version).  */
 
@@ -2571,6 +2572,12 @@ typedef Elf32_Addr Elf32_Conflict;
 #define R_C60HI16      0x55       /* high 16 bit MVKH embedded */
 /* Keep this the last entry.  */
 #define R_C60_NUM      0x56
+
+#define R_K16_NONE     0
+#define R_K16_ABS32    1
+#define R_K16_CALL32   2
+#define R_K16_BRANCH4  3
+#define R_K16_NUM      4
 
 /* IA-64 specific declarations.  */
 
