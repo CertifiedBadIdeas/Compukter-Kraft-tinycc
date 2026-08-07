@@ -169,6 +169,19 @@ static void k16_move(int dst, int src)
     k16_addi(dst, src, 0);
 }
 
+static void k16_adjust_sp(int amount)
+{
+    if (amount >= -32768 && amount <= 32767) {
+        k16_addi(K16_SP, K16_SP, amount);
+    } else {
+        k16_const32(K16_SCRATCH0, (uint32_t)(amount < 0 ? -amount : amount));
+        if (amount < 0)
+            k16_sub(K16_SP, K16_SP, K16_SCRATCH0);
+        else
+            k16_add(K16_SP, K16_SP, K16_SCRATCH0);
+    }
+}
+
 static void k16_base_offset(int *base, int *offset, int scratch)
 {
     int other = scratch == K16_SCRATCH0 ? K16_SCRATCH1 : K16_SCRATCH0;
@@ -196,8 +209,10 @@ static int k16_value_address(SValue *sv, int scratch, int *offset)
         *offset = 0;
         return scratch;
     }
-    if (v < VT_CONST)
+    if (v < VT_CONST) {
+        *offset = 0;
         return v;
+    }
     if (v == VT_CONST) {
         k16_const32(scratch, (uint32_t)*offset);
         *offset = 0;
@@ -314,30 +329,102 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret,
 {
     int align;
     int size = type_size(vt, &align);
-    (void)variadic;
+    int bt = vt->t & VT_BTYPE;
+    if (variadic)
+        k16_unimplemented("variadic functions");
+    if (is_float(bt))
+        k16_unimplemented("floating-point returns");
+    if (bt == VT_STRUCT)
+        k16_unimplemented("aggregate returns");
+    if (size > 4)
+        k16_unimplemented("returns wider than one 32-bit ABI slot");
     ret->t = VT_INT;
     ret->ref = NULL;
     *ret_align = 1;
     *regsize = 4;
-    return size <= 4 ? 1 : 0;
+    return 1;
 }
 
 ST_FUNC void gfunc_call(int nb_args)
 {
-    (void)nb_args;
-    k16_unimplemented("function calls");
+    SValue *func = &vtop[-nb_args];
+    int stack_args = nb_args > 3 ? nb_args - 3 : 0;
+    int outgoing_size = ((stack_args * 4 + 7) & -8) + 4;
+    int i, r;
+
+    if (func->type.ref && func->type.ref->f.func_type == FUNC_ELLIPSIS)
+        k16_unimplemented("variadic calls");
+    for (i = 0; i < nb_args; ++i) {
+        SValue *arg = &vtop[-nb_args + 1 + i];
+        int bt = arg->type.t & VT_BTYPE;
+        int align, size = type_size(&arg->type, &align);
+        if (is_float(bt))
+            k16_unimplemented("floating-point call arguments");
+        if (bt == VT_STRUCT)
+            k16_unimplemented("aggregate call arguments");
+        if (size > 4)
+            k16_unimplemented("call arguments wider than one 32-bit ABI slot");
+    }
+
+    save_regs(0);
+    k16_adjust_sp(-outgoing_size);
+
+    for (i = 3; i < nb_args; ++i) {
+        vpushv(&vtop[-nb_args + 1 + i]);
+        r = gv(RC_INT);
+        k16_store_offset(4, K16_SP, r, (i - 3) * 4);
+        --vtop;
+    }
+    for (i = 0; i < nb_args && i < 3; ++i) {
+        vpushv(&vtop[-nb_args + 1 + i]);
+        gv(RC_R(i + 1));
+        --vtop;
+    }
+
+    func = &vtop[-nb_args];
+    if ((func->r & (VT_VALMASK | VT_LVAL)) == VT_CONST &&
+        (func->r & VT_SYM)) {
+        k16_const32_sym(K16_SCRATCH1, func->sym, func->c.i, R_K16_CALL32);
+    } else {
+        vpushv(func);
+        r = gv(RC_INT);
+        k16_move(K16_SCRATCH1, r);
+        --vtop;
+    }
+    o(0x8000u | (K16_SCRATCH1 << 8));
+    k16_adjust_sp(outgoing_size);
+    vtop -= nb_args + 1;
 }
 
 ST_FUNC void gfunc_prolog(Sym *func_sym)
 {
     Sym *param = func_sym->type.ref;
+    int index = 0;
     if (func_var)
         k16_unimplemented("variadic functions");
-    if (param && param->next)
-        k16_unimplemented("function parameters");
     loc = 0;
     func_prolog_offset = ind;
     ind += 14;
+    while ((param = param->next) != NULL) {
+        int bt = param->type.t & VT_BTYPE;
+        int align, size = type_size(&param->type, &align);
+        int address;
+        if (is_float(bt))
+            k16_unimplemented("floating-point parameters");
+        if (bt == VT_STRUCT)
+            k16_unimplemented("aggregate parameters");
+        if (size > 4)
+            k16_unimplemented("parameters wider than one 32-bit ABI slot");
+        if (index < 3) {
+            loc -= 4;
+            address = loc;
+            k16_store_offset(4, K16_FP, index + 1, address);
+        } else {
+            address = 8 + (index - 3) * 4;
+        }
+        gfunc_set_param(param, address, 0);
+        ++index;
+    }
 }
 
 ST_FUNC void gfunc_epilog(void)
@@ -354,12 +441,7 @@ ST_FUNC void gfunc_epilog(void)
     ind = func_prolog_offset;
     k16_store_offset(4, K16_SP, K16_FP, -4);
     k16_addi(K16_FP, K16_SP, -4);
-    if (frame_size <= 32768)
-        k16_addi(K16_SP, K16_SP, -frame_size);
-    else {
-        k16_const32(K16_SCRATCH0, (uint32_t)frame_size);
-        k16_sub(K16_SP, K16_SP, K16_SCRATCH0);
-    }
+    k16_adjust_sp(-frame_size);
     gen_fill_nops(func_prolog_offset + 14 - ind);
     ind = saved_ind;
 }
