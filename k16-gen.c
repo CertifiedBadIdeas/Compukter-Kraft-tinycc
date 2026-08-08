@@ -14,7 +14,7 @@
 #define NB_REGS 12
 
 #define RC_INT (1 << 0)
-#define RC_FLOAT 0
+#define RC_FLOAT RC_INT
 #define RC_R(x) (1 << (1 + (x)))
 
 #define RC_IRET RC_R(0)
@@ -81,14 +81,31 @@ static void k16_reject_varargs(void)
     tcc_error("K16 TinyCC does not support variadic functions yet");
 }
 
-static void k16_reject_wide(void)
-{
-    tcc_error("K16 TinyCC does not support values wider than one 32-bit ABI slot yet");
-}
-
 static void k16_reject_aggregate(void)
 {
     tcc_error("K16 TinyCC does not support aggregate arguments or returns yet");
+}
+
+typedef struct K16ArgumentClass {
+    int size;
+    int align;
+    int slots;
+} K16ArgumentClass;
+
+static K16ArgumentClass k16_classify_direct_argument(CType *type)
+{
+    K16ArgumentClass result;
+    int bt = type->t & VT_BTYPE;
+
+    if (bt == VT_STRUCT)
+        k16_reject_aggregate();
+    result.size = type_size(type, &result.align);
+    if (result.size <= 0 || result.size > 8)
+        tcc_error("K16 TinyCC cannot classify this direct argument type");
+    if (result.align > MAX_ALIGN)
+        tcc_error("K16 TinyCC arguments cannot require alignment above 8 bytes");
+    result.slots = (result.size + 3) / 4;
+    return result;
 }
 
 ST_FUNC void o(unsigned int word)
@@ -270,10 +287,8 @@ ST_FUNC void load(int r, SValue *sv)
     int bt = sv->type.t & VT_BTYPE;
     int align, size, base, offset;
 
-    if (is_float(bt))
-        k16_reject_float();
-    if (bt == VT_LLONG || bt == VT_STRUCT)
-        k16_reject_wide();
+    if (bt == VT_STRUCT)
+        k16_reject_aggregate();
     if (sv->r & VT_LVAL) {
         size = type_size(&sv->type, &align);
         if (bt == VT_PTR || bt == VT_FUNC)
@@ -332,8 +347,8 @@ ST_FUNC void store(int r, SValue *sv)
 {
     int bt = sv->type.t & VT_BTYPE;
     int align, size, base, offset;
-    if (is_float(bt))
-        k16_reject_float();
+    if (bt == VT_STRUCT)
+        k16_reject_aggregate();
     size = type_size(&sv->type, &align);
     if (bt == VT_PTR || bt == VT_FUNC)
         size = PTR_SIZE;
@@ -347,8 +362,6 @@ ST_FUNC void store(int r, SValue *sv)
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret,
                        int *ret_align, int *regsize)
 {
-    int align;
-    int size = type_size(vt, &align);
     int bt = vt->t & VT_BTYPE;
     if (variadic)
         k16_reject_varargs();
@@ -356,8 +369,6 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret,
         k16_reject_float();
     if (bt == VT_STRUCT)
         k16_reject_aggregate();
-    if (size > 4)
-        k16_reject_wide();
     ret->t = VT_INT;
     ret->ref = NULL;
     *ret_align = 1;
@@ -368,36 +379,55 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret,
 ST_FUNC void gfunc_call(int nb_args)
 {
     SValue *func = &vtop[-nb_args];
-    int stack_args = nb_args > 3 ? nb_args - 3 : 0;
-    int outgoing_size = ((stack_args * 4 + 7) & -8) + 4;
-    int i, r;
+    int total_slots = 0;
+    int outgoing_size;
+    int i, part, r, slot;
 
     if (func->type.ref && func->type.ref->f.func_type == FUNC_ELLIPSIS)
         k16_reject_varargs();
     for (i = 0; i < nb_args; ++i) {
         SValue *arg = &vtop[-nb_args + 1 + i];
-        int bt = arg->type.t & VT_BTYPE;
-        int align, size = type_size(&arg->type, &align);
-        if (is_float(bt))
-            k16_reject_float();
-        if (bt == VT_STRUCT)
-            k16_reject_aggregate();
-        if (size > 4)
-            k16_reject_wide();
+        K16ArgumentClass argument = k16_classify_direct_argument(&arg->type);
+        total_slots += argument.slots;
     }
+    outgoing_size =
+        ((((total_slots > 3 ? total_slots - 3 : 0) * 4) + 7) & -8) + 4;
 
     save_regs(0);
     k16_adjust_sp(-outgoing_size);
 
-    for (i = 3; i < nb_args; ++i) {
-        vpushv(&vtop[-nb_args + 1 + i]);
-        r = gv(RC_INT);
-        k16_store_offset(4, K16_SP, r, (i - 3) * 4);
+    slot = 0;
+    for (i = 0; i < nb_args; ++i) {
+        SValue *arg = &vtop[-nb_args + 1 + i];
+        K16ArgumentClass argument = k16_classify_direct_argument(&arg->type);
+
+        if (slot + argument.slots <= 3) {
+            slot += argument.slots;
+            continue;
+        }
+        vpushv(arg);
+        gv(RC_INT);
+        for (part = 0; part < argument.slots; ++part) {
+            int fragment_slot = slot + part;
+            if (fragment_slot < 3)
+                continue;
+            r = part == 0 ? vtop->r & VT_VALMASK : vtop->r2;
+            k16_store_offset(4, K16_SP, r, (fragment_slot - 3) * 4);
+        }
         --vtop;
+        slot += argument.slots;
     }
-    for (i = 0; i < nb_args && i < 3; ++i) {
-        vpushv(&vtop[-nb_args + 1 + i]);
-        gv(RC_R(i + 1));
+
+    slot = total_slots;
+    for (i = nb_args - 1; i >= 0; --i) {
+        SValue *arg = &vtop[-nb_args + 1 + i];
+        K16ArgumentClass argument = k16_classify_direct_argument(&arg->type);
+
+        slot -= argument.slots;
+        if (slot >= 3)
+            continue;
+        vpushv(arg);
+        gv(RC_R(slot + 1));
         --vtop;
     }
 
@@ -419,31 +449,42 @@ ST_FUNC void gfunc_call(int nb_args)
 ST_FUNC void gfunc_prolog(Sym *func_sym)
 {
     Sym *param = func_sym->type.ref;
-    int index = 0;
+    int slot = 0;
     if (func_var)
         k16_reject_varargs();
     loc = 0;
     func_prolog_offset = ind;
     ind += 14;
     while ((param = param->next) != NULL) {
-        int bt = param->type.t & VT_BTYPE;
-        int align, size = type_size(&param->type, &align);
-        int address;
-        if (is_float(bt))
-            k16_reject_float();
-        if (bt == VT_STRUCT)
-            k16_reject_aggregate();
-        if (size > 4)
-            k16_reject_wide();
-        if (index < 3) {
-            loc -= 4;
+        K16ArgumentClass argument = k16_classify_direct_argument(&param->type);
+        int address, part;
+
+        if (slot < 3) {
+            if (argument.slots == 1) {
+                loc -= 4;
+            } else {
+                loc = (loc - argument.size - 4) & -argument.align;
+                loc += 4;
+            }
             address = loc;
-            k16_store_offset(4, K16_FP, index + 1, address);
+            for (part = 0; part < argument.slots; ++part) {
+                int fragment_slot = slot + part;
+                int source;
+
+                if (fragment_slot < 3) {
+                    source = fragment_slot + 1;
+                } else {
+                    k16_load_offset(4, K16_SCRATCH0, K16_FP,
+                                    8 + (fragment_slot - 3) * 4);
+                    source = K16_SCRATCH0;
+                }
+                k16_store_offset(4, K16_FP, source, address + part * 4);
+            }
         } else {
-            address = 8 + (index - 3) * 4;
+            address = 8 + (slot - 3) * 4;
         }
         gfunc_set_param(param, address, 0);
-        ++index;
+        slot += argument.slots;
     }
 }
 

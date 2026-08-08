@@ -249,7 +249,11 @@ static int R2_RET(int t)
 {
     t &= VT_BTYPE;
 #if PTR_SIZE == 4
-    if (t == VT_LLONG)
+    if (t == VT_LLONG
+#ifdef TCC_TARGET_K16
+        || t == VT_DOUBLE || t == VT_LDOUBLE
+#endif
+        )
         return REG_IRE2;
 #elif defined TCC_TARGET_X86_64
     if (t == VT_QLONG)
@@ -303,6 +307,12 @@ static int RC2_TYPE(int t, int rc)
 #ifdef RC_IRE2
     if (rc == RC_IRET)
         return RC_IRE2;
+#endif
+#ifdef TCC_TARGET_K16
+    if (rc == RC_R(1))
+        return RC_R(2);
+    if (rc == RC_R(2))
+        return RC_R(3);
 #endif
 #ifdef RC_FRE2
     if (rc == RC_FRET)
