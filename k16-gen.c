@@ -77,11 +77,6 @@ static void k16_reject_float(void)
     tcc_error("K16 TinyCC does not support floating-point code yet");
 }
 
-static void k16_reject_varargs(void)
-{
-    tcc_error("K16 TinyCC does not support variadic functions yet");
-}
-
 static void k16_reject_aggregate(void)
 {
     tcc_error("K16 TinyCC does not support aggregate arguments or returns yet");
@@ -419,8 +414,7 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret,
                        int *ret_align, int *regsize)
 {
     int bt = vt->t & VT_BTYPE;
-    if (variadic)
-        k16_reject_varargs();
+    (void)variadic;
     if (is_float(bt))
         k16_reject_float();
     if (bt == VT_STRUCT)

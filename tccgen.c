@@ -4124,6 +4124,11 @@ redo:
             ad->a.dllimport = 1;
             break;
         default:
+#ifdef TCC_TARGET_K16
+            if (!strcmp(get_tok_str(t, NULL), "vector_size") ||
+                !strcmp(get_tok_str(t, NULL), "__vector_size__"))
+                tcc_error("K16 TinyCC does not support vector values");
+#endif
             tcc_warning_c(warn_unsupported)("'%s' attribute ignored", get_tok_str(t, NULL));
             /* skip parameters */
 skip_param:
@@ -4816,7 +4821,11 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
             u = VT_BOOL;
             goto basic_type;
         case TOK_COMPLEX:
+#ifdef TCC_TARGET_K16
+            tcc_error("K16 TinyCC does not support complex values");
+#else
             tcc_error("_Complex is not yet supported");
+#endif
         case TOK_FLOAT:
             u = VT_FLOAT;
             goto basic_type;
