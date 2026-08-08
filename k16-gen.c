@@ -332,20 +332,32 @@ static void k16_materialize_compare(int dst, int op, int lhs, int rhs)
     }
 }
 
+static int k16_memory_fragment_width(CType *type, const char *unsupported)
+{
+    int align;
+    int bt = type->t & VT_BTYPE;
+    int size = type_size(type, &align);
+
+    if (bt == VT_PTR || bt == VT_FUNC)
+        size = PTR_SIZE;
+    if (size == 8 &&
+        (bt == VT_LLONG || bt == VT_DOUBLE || bt == VT_LDOUBLE))
+        return PTR_SIZE;
+    if (size != 1 && size != 2 && size != 4)
+        k16_unimplemented(unsupported);
+    return size;
+}
+
 ST_FUNC void load(int r, SValue *sv)
 {
     int v = sv->r & VT_VALMASK;
     int bt = sv->type.t & VT_BTYPE;
-    int align, size, base, offset;
+    int size, base, offset;
 
     if (bt == VT_STRUCT)
         k16_reject_aggregate();
     if (sv->r & VT_LVAL) {
-        size = type_size(&sv->type, &align);
-        if (bt == VT_PTR || bt == VT_FUNC)
-            size = PTR_SIZE;
-        if (size != 1 && size != 2 && size != 4)
-            k16_unimplemented("this memory load width");
+        size = k16_memory_fragment_width(&sv->type, "this memory load width");
         base = k16_value_address(sv, K16_SCRATCH0, &offset);
         k16_base_offset(&base, &offset, K16_SCRATCH0);
         k16_load_offset(size, r, base, offset);
@@ -397,14 +409,10 @@ ST_FUNC void load(int r, SValue *sv)
 ST_FUNC void store(int r, SValue *sv)
 {
     int bt = sv->type.t & VT_BTYPE;
-    int align, size, base, offset;
+    int size, base, offset;
     if (bt == VT_STRUCT)
         k16_reject_aggregate();
-    size = type_size(&sv->type, &align);
-    if (bt == VT_PTR || bt == VT_FUNC)
-        size = PTR_SIZE;
-    if (size != 1 && size != 2 && size != 4)
-        k16_unimplemented("this memory store width");
+    size = k16_memory_fragment_width(&sv->type, "this memory store width");
     base = k16_value_address(sv, K16_SCRATCH0, &offset);
     k16_base_offset(&base, &offset, K16_SCRATCH0);
     k16_store_offset(size, base, r, offset);
