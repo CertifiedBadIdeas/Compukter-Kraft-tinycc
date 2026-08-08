@@ -55,6 +55,7 @@ ST_DATA const int reg_classes[NB_REGS] = {
 #define K16_SP 15
 
 static int func_prolog_offset;
+static int func_varargs_offset;
 
 static void k16_assert_reg(int reg)
 {
@@ -87,25 +88,65 @@ static void k16_reject_aggregate(void)
 }
 
 typedef struct K16ArgumentClass {
+    int indirect;
     int size;
     int align;
     int slots;
+    int object_size;
+    int object_align;
 } K16ArgumentClass;
 
-static K16ArgumentClass k16_classify_direct_argument(CType *type)
+typedef struct K16CallArgument {
+    K16ArgumentClass classification;
+    int fixed_slot;
+    int stack_passed;
+    int stack_offset;
+    int copy_offset;
+} K16CallArgument;
+
+static int k16_align_up(int value, int alignment)
+{
+    return (value + alignment - 1) & -alignment;
+}
+
+static K16ArgumentClass k16_classify_argument(CType *type)
 {
     K16ArgumentClass result;
     int bt = type->t & VT_BTYPE;
 
-    if (bt == VT_STRUCT)
-        k16_reject_aggregate();
-    result.size = type_size(type, &result.align);
+    result.indirect = bt == VT_STRUCT;
+    result.object_size = type_size(type, &result.object_align);
+    if (result.indirect) {
+        if (result.object_size <= 0)
+            tcc_error("K16 TinyCC does not support empty aggregate arguments");
+        if (result.object_align > MAX_ALIGN)
+            tcc_error("K16 TinyCC arguments cannot require alignment above 8 bytes");
+        result.size = PTR_SIZE;
+        result.align = PTR_SIZE;
+        result.slots = 1;
+        return result;
+    }
+    result.size = result.object_size;
+    result.align = result.object_align;
     if (result.size <= 0 || result.size > 8)
         tcc_error("K16 TinyCC cannot classify this direct argument type");
     if (result.align > MAX_ALIGN)
         tcc_error("K16 TinyCC arguments cannot require alignment above 8 bytes");
     result.slots = (result.size + 3) / 4;
     return result;
+}
+
+static int k16_fixed_parameter_count(SValue *func, int nb_args)
+{
+    Sym *parameter;
+    int count = 0;
+
+    if (!func->type.ref || func->type.ref->f.func_type != FUNC_ELLIPSIS)
+        return nb_args;
+    parameter = func->type.ref;
+    while ((parameter = parameter->next) != NULL)
+        ++count;
+    return count;
 }
 
 ST_FUNC void o(unsigned int word)
@@ -376,58 +417,142 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret,
     return 1;
 }
 
+static void k16_copy_call_argument(SValue *argument, int destination,
+                                   int size)
+{
+    int source_offset, source_base, copied = 0;
+
+    if (!(argument->r & VT_LVAL))
+        tcc_error("K16 TinyCC aggregate argument is not addressable");
+    source_base = k16_value_address(argument, K16_SCRATCH0, &source_offset);
+    while (copied < size) {
+        int base = source_base;
+        int offset = source_offset + copied;
+        int remaining = size - copied;
+        int width = remaining >= 4 ? 4 : remaining >= 2 ? 2 : 1;
+
+        k16_base_offset(&base, &offset, K16_SCRATCH0);
+        k16_load_offset(width, K16_SCRATCH1, base, offset);
+        k16_store_offset(width, K16_SP, K16_SCRATCH1,
+                         destination + copied);
+        copied += width;
+    }
+}
+
 ST_FUNC void gfunc_call(int nb_args)
 {
     SValue *func = &vtop[-nb_args];
-    int total_slots = 0;
+    K16CallArgument *arguments;
+    int fixed_count = k16_fixed_parameter_count(func, nb_args);
+    int fixed_slots = 0;
+    int fixed_stack_size;
+    int next_vararg_offset;
+    int logical_size;
     int outgoing_size;
-    int i, part, r, slot;
+    int i, part, r;
 
-    if (func->type.ref && func->type.ref->f.func_type == FUNC_ELLIPSIS)
-        k16_reject_varargs();
+    arguments = tcc_mallocz(sizeof(*arguments) * nb_args);
     for (i = 0; i < nb_args; ++i) {
         SValue *arg = &vtop[-nb_args + 1 + i];
-        K16ArgumentClass argument = k16_classify_direct_argument(&arg->type);
-        total_slots += argument.slots;
+        K16CallArgument *argument = &arguments[i];
+
+        argument->classification = k16_classify_argument(&arg->type);
+        argument->fixed_slot = -1;
+        argument->stack_passed = 0;
+        argument->stack_offset = -1;
+        argument->copy_offset = -1;
+        if (i < fixed_count) {
+            argument->fixed_slot = fixed_slots;
+            fixed_slots += argument->classification.slots;
+        }
     }
-    outgoing_size =
-        ((((total_slots > 3 ? total_slots - 3 : 0) * 4) + 7) & -8) + 4;
+
+    fixed_stack_size = fixed_slots > 3 ? (fixed_slots - 3) * 4 : 0;
+    next_vararg_offset = 4 + fixed_stack_size;
+    for (i = 0; i < nb_args; ++i) {
+        K16CallArgument *argument = &arguments[i];
+
+        if (argument->fixed_slot >= 0) {
+            if (argument->fixed_slot + argument->classification.slots > 3) {
+                argument->stack_passed = 1;
+                argument->stack_offset = (argument->fixed_slot - 3) * 4;
+            }
+            continue;
+        }
+        next_vararg_offset =
+            k16_align_up(next_vararg_offset, argument->classification.align);
+        argument->stack_offset = next_vararg_offset - 4;
+        argument->stack_passed = 1;
+        next_vararg_offset += argument->classification.size;
+    }
+    logical_size = next_vararg_offset - 4;
+    for (i = 0; i < nb_args; ++i) {
+        K16CallArgument *argument = &arguments[i];
+        K16ArgumentClass *classification = &argument->classification;
+        int copy_callee_offset;
+
+        if (!classification->indirect)
+            continue;
+        copy_callee_offset =
+            k16_align_up(4 + logical_size, classification->object_align);
+        argument->copy_offset = copy_callee_offset - 4;
+        logical_size = argument->copy_offset + classification->object_size;
+    }
+    outgoing_size = k16_align_up(logical_size, 8) + 4;
+    if (outgoing_size > 32767)
+        tcc_error("K16 TinyCC call frame exceeds the supported 32767 bytes");
 
     save_regs(0);
     k16_adjust_sp(-outgoing_size);
 
-    slot = 0;
     for (i = 0; i < nb_args; ++i) {
         SValue *arg = &vtop[-nb_args + 1 + i];
-        K16ArgumentClass argument = k16_classify_direct_argument(&arg->type);
+        K16CallArgument *argument = &arguments[i];
 
-        if (slot + argument.slots <= 3) {
-            slot += argument.slots;
+        if (!argument->classification.indirect)
+            continue;
+        k16_copy_call_argument(arg, argument->copy_offset,
+                               argument->classification.object_size);
+    }
+
+    for (i = 0; i < nb_args; ++i) {
+        SValue *arg = &vtop[-nb_args + 1 + i];
+        K16CallArgument *argument = &arguments[i];
+
+        if (!argument->stack_passed)
+            continue;
+        if (argument->classification.indirect) {
+            k16_addi(K16_SCRATCH0, K16_SP, argument->copy_offset);
+            k16_store_offset(4, K16_SP, K16_SCRATCH0,
+                             argument->stack_offset);
             continue;
         }
         vpushv(arg);
         gv(RC_INT);
-        for (part = 0; part < argument.slots; ++part) {
-            int fragment_slot = slot + part;
-            if (fragment_slot < 3)
+        for (part = 0; part < argument->classification.slots; ++part) {
+            int destination = argument->stack_offset + part * 4;
+
+            if (destination < 0)
                 continue;
             r = part == 0 ? vtop->r & VT_VALMASK : vtop->r2;
-            k16_store_offset(4, K16_SP, r, (fragment_slot - 3) * 4);
+            k16_store_offset(4, K16_SP, r, destination);
         }
         --vtop;
-        slot += argument.slots;
     }
 
-    slot = total_slots;
     for (i = nb_args - 1; i >= 0; --i) {
         SValue *arg = &vtop[-nb_args + 1 + i];
-        K16ArgumentClass argument = k16_classify_direct_argument(&arg->type);
+        K16CallArgument *argument = &arguments[i];
 
-        slot -= argument.slots;
-        if (slot >= 3)
+        if (argument->fixed_slot < 0 || argument->fixed_slot >= 3)
             continue;
+        if (argument->classification.indirect) {
+            k16_addi(argument->fixed_slot + 1, K16_SP,
+                     argument->copy_offset);
+            continue;
+        }
         vpushv(arg);
-        gv(RC_R(slot + 1));
+        gv(RC_R(argument->fixed_slot + 1));
         --vtop;
     }
 
@@ -443,6 +568,7 @@ ST_FUNC void gfunc_call(int nb_args)
     }
     o(0x8000u | (K16_SCRATCH1 << 8));
     k16_adjust_sp(outgoing_size);
+    tcc_free(arguments);
     vtop -= nb_args + 1;
 }
 
@@ -450,13 +576,11 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
 {
     Sym *param = func_sym->type.ref;
     int slot = 0;
-    if (func_var)
-        k16_reject_varargs();
     loc = 0;
     func_prolog_offset = ind;
     ind += 14;
     while ((param = param->next) != NULL) {
-        K16ArgumentClass argument = k16_classify_direct_argument(&param->type);
+        K16ArgumentClass argument = k16_classify_argument(&param->type);
         int address, part;
 
         if (slot < 3) {
@@ -483,9 +607,10 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
         } else {
             address = 8 + (slot - 3) * 4;
         }
-        gfunc_set_param(param, address, 0);
+        gfunc_set_param(param, address, argument.indirect);
         slot += argument.slots;
     }
+    func_varargs_offset = 8 + (slot > 3 ? slot - 3 : 0) * 4;
 }
 
 ST_FUNC void gfunc_epilog(void)
@@ -676,6 +801,41 @@ ST_FUNC void gen_opf(int op) { (void)op; k16_reject_float(); }
 ST_FUNC void gen_cvt_ftoi(int t) { (void)t; k16_reject_float(); }
 ST_FUNC void gen_cvt_itof(int t) { (void)t; k16_reject_float(); }
 ST_FUNC void gen_cvt_ftof(int t) { (void)t; k16_reject_float(); }
+
+ST_FUNC void gen_va_start(void)
+{
+    --vtop;
+    vset(&char_pointer_type, VT_LOCAL, func_varargs_offset);
+}
+
+ST_FUNC void gen_va_arg(CType *type)
+{
+    K16ArgumentClass argument = k16_classify_argument(type);
+    int base, offset, cursor;
+    int extent = argument.slots * 4;
+
+    if (!(vtop->r & VT_LVAL))
+        tcc_error("__builtin_va_arg expects a modifiable va_list");
+    base = k16_value_address(vtop, K16_SCRATCH1, &offset);
+    k16_base_offset(&base, &offset, K16_SCRATCH1);
+    cursor = get_reg(RC_INT);
+    k16_load_offset(4, cursor, base, offset);
+    if (argument.align > 1) {
+        k16_const32(K16_SCRATCH0, (uint32_t)(argument.align - 1));
+        k16_add(cursor, cursor, K16_SCRATCH0);
+        k16_const32(K16_SCRATCH0, (uint32_t)-argument.align);
+        k16_and(cursor, cursor, K16_SCRATCH0);
+    }
+    k16_addi(K16_SCRATCH0, cursor, extent);
+    k16_store_offset(4, base, K16_SCRATCH0, offset);
+    if (argument.indirect)
+        k16_load_offset(4, cursor, cursor, 0);
+    vtop->type = *type;
+    vtop->r = cursor | VT_LVAL;
+    vtop->c.i = 0;
+    vtop->sym = NULL;
+}
+
 ST_FUNC void ggoto(void) { k16_unimplemented("computed goto"); }
 ST_FUNC void gen_vla_sp_save(int addr) { (void)addr; k16_unimplemented("variable-length arrays"); }
 ST_FUNC void gen_vla_sp_restore(int addr) { (void)addr; k16_unimplemented("variable-length arrays"); }

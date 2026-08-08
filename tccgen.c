@@ -5925,6 +5925,25 @@ ST_FUNC void unary(void)
 	vstore();
         break;
 #endif
+#ifdef TCC_TARGET_K16
+    case TOK_builtin_va_start:
+        parse_builtin_params(0, "ee");
+        r = vtop->r & VT_VALMASK;
+        if (r == VT_LLOCAL)
+            r = VT_LOCAL;
+        if (r != VT_LOCAL)
+            tcc_error("__builtin_va_start expects a local variable");
+        gen_va_start();
+        vstore();
+        break;
+    case TOK_builtin_va_arg:
+        parse_builtin_params(0, "et");
+        type = vtop->type;
+        vpop();
+        gen_va_arg(&type);
+        vtop->type = type;
+        break;
+#endif
 #ifdef TCC_TARGET_X86_64
 #ifdef TCC_TARGET_PE
     case TOK_builtin_va_start:

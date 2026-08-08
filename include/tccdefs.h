@@ -243,6 +243,9 @@
                                   & -(__alignof__(type)))
     #define __builtin_va_arg(ap,type) (*(sizeof(type) > (2*__va_reg_size) ? *(type **)((ap += __va_reg_size) - __va_reg_size) : (ap = (va_list)(_tcc_align(ap,type) + (sizeof(type)+__va_reg_size - 1)& -__va_reg_size), (type *)(ap - ((sizeof(type)+ __va_reg_size - 1)& -__va_reg_size)))))
 
+#elif defined __k16__
+    typedef char *__builtin_va_list;
+
 #else /* __i386__ */
     typedef char *__builtin_va_list;
     #define __builtin_va_start(ap,last) (ap = ((char *)&(last)) + ((sizeof(last)+3)&~3))

@@ -1740,6 +1740,12 @@ ST_FUNC void gen_increment_tcov (SValue *sv);
 ST_FUNC void gen_clear_cache(void);
 #endif
 
+/* ------------ k16-gen.c ------------ */
+#ifdef TCC_TARGET_K16
+ST_FUNC void gen_va_start(void);
+ST_FUNC void gen_va_arg(CType *t);
+#endif
+
 /* ------------ c67-gen.c ------------ */
 #ifdef TCC_TARGET_C67
 #endif
