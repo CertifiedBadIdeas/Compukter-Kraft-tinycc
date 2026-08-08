@@ -27,8 +27,8 @@
 
 #define PTR_SIZE 4
 #define LDOUBLE_SIZE 8
-#define LDOUBLE_ALIGN 4
-#define MAX_ALIGN 4
+#define LDOUBLE_ALIGN 8
+#define MAX_ALIGN 8
 #define PROMOTE_RET
 
 #else
