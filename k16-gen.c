@@ -136,6 +136,21 @@ static K16ArgumentClass k16_classify_argument(CType *type)
     return result;
 }
 
+static K16ArgumentClass k16_classify_call_argument(CType *type, int variadic)
+{
+    int bt = type->t & VT_BTYPE;
+
+    if (variadic &&
+        (bt == VT_BOOL || bt == VT_BYTE || bt == VT_SHORT)) {
+        CType promoted = *type;
+
+        promoted.t = (promoted.t & ~(VT_BTYPE | VT_LONG | VT_UNSIGNED)) |
+                     VT_INT;
+        return k16_classify_argument(&promoted);
+    }
+    return k16_classify_argument(type);
+}
+
 static int k16_fixed_parameter_count(SValue *func, int nb_args)
 {
     Sym *parameter;
@@ -456,7 +471,8 @@ ST_FUNC void gfunc_call(int nb_args)
         SValue *arg = &vtop[-nb_args + 1 + i];
         K16CallArgument *argument = &arguments[i];
 
-        argument->classification = k16_classify_argument(&arg->type);
+        argument->classification =
+            k16_classify_call_argument(&arg->type, i >= fixed_count);
         argument->fixed_slot = -1;
         argument->stack_passed = 0;
         argument->stack_offset = -1;
@@ -759,7 +775,6 @@ static int k16_division(int op, int lhs, int rhs)
 ST_FUNC void gen_opi(int op)
 {
     int lhs, rhs, dst;
-    save_regs(2);
     gv2(RC_INT, RC_INT);
     lhs = vtop[-1].r;
     rhs = vtop[0].r;
