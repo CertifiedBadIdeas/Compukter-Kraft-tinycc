@@ -806,10 +806,132 @@ ST_FUNC void gen_opi(int op)
         break;
     }
 }
-ST_FUNC void gen_opf(int op) { (void)op; k16_reject_float(); }
-ST_FUNC void gen_cvt_ftoi(int t) { (void)t; k16_reject_float(); }
-ST_FUNC void gen_cvt_itof(int t) { (void)t; k16_reject_float(); }
-ST_FUNC void gen_cvt_ftof(int t) { (void)t; k16_reject_float(); }
+static void k16_call_float_helper(int function, int arguments, int result_type)
+{
+    vpush_helper_func(function);
+    vrott(arguments + 1);
+    gfunc_call(arguments);
+    vpushi(0);
+    vtop->type.t = result_type;
+    PUT_R_RET(vtop, result_type);
+}
+
+ST_FUNC void gen_opf(int op)
+{
+    int type = vtop->type.t;
+    int bt = type & VT_BTYPE;
+    int function = 0;
+    int comparison = 0;
+
+    if (bt != VT_FLOAT && bt != VT_DOUBLE && bt != VT_LDOUBLE)
+        k16_reject_float();
+    if (op == TOK_NEG) {
+        function = bt == VT_FLOAT ? TOK___negsf2 : TOK___negdf2;
+        k16_call_float_helper(function, 1, type);
+        return;
+    }
+    switch (op) {
+    case '+':
+        function = bt == VT_FLOAT ? TOK___addsf3 : TOK___adddf3;
+        break;
+    case '-':
+        function = bt == VT_FLOAT ? TOK___subsf3 : TOK___subdf3;
+        break;
+    case '*':
+        function = bt == VT_FLOAT ? TOK___mulsf3 : TOK___muldf3;
+        break;
+    case '/':
+        function = bt == VT_FLOAT ? TOK___divsf3 : TOK___divdf3;
+        break;
+    case TOK_EQ:
+        function = bt == VT_FLOAT ? TOK___eqsf2 : TOK___eqdf2;
+        comparison = TOK_EQ;
+        break;
+    case TOK_NE:
+        function = bt == VT_FLOAT ? TOK___nesf2 : TOK___nedf2;
+        comparison = TOK_NE;
+        break;
+    case TOK_LT:
+        function = bt == VT_FLOAT ? TOK___ltsf2 : TOK___ltdf2;
+        comparison = TOK_LT;
+        break;
+    case TOK_LE:
+        function = bt == VT_FLOAT ? TOK___lesf2 : TOK___ledf2;
+        comparison = TOK_LE;
+        break;
+    case TOK_GT:
+        function = bt == VT_FLOAT ? TOK___gtsf2 : TOK___gtdf2;
+        comparison = TOK_GT;
+        break;
+    case TOK_GE:
+        function = bt == VT_FLOAT ? TOK___gesf2 : TOK___gedf2;
+        comparison = TOK_GE;
+        break;
+    default:
+        k16_unimplemented("this floating-point operator");
+        return;
+    }
+    k16_call_float_helper(function, 2, comparison ? VT_INT : type);
+    if (comparison) {
+        vpushi(0);
+        gen_opi(comparison);
+    }
+}
+
+ST_FUNC void gen_cvt_ftoi(int t)
+{
+    int source = vtop->type.t & VT_BTYPE;
+    int destination = t & (VT_BTYPE | VT_UNSIGNED);
+    int function;
+
+    if (source != VT_FLOAT && source != VT_DOUBLE && source != VT_LDOUBLE)
+        k16_reject_float();
+    if ((destination & VT_BTYPE) == VT_LLONG) {
+        function = source == VT_FLOAT ? TOK___fixsfdi : TOK___fixdfdi;
+    } else if (destination & VT_UNSIGNED) {
+        function = source == VT_FLOAT ? TOK___fixunssfsi : TOK___fixunsdfsi;
+    } else {
+        function = source == VT_FLOAT ? TOK___fixsfsi : TOK___fixdfsi;
+    }
+    k16_call_float_helper(function, 1, t);
+}
+
+ST_FUNC void gen_cvt_itof(int t)
+{
+    int source = vtop->type.t & (VT_BTYPE | VT_UNSIGNED);
+    int destination = t & VT_BTYPE;
+    int source_is_wide = (source & VT_BTYPE) == VT_LLONG;
+    int destination_is_float = destination == VT_FLOAT;
+    int function;
+
+    if (source_is_wide) {
+        if (source & VT_UNSIGNED)
+            function = destination_is_float ? TOK___floatundisf : TOK___floatundidf;
+        else
+            function = destination_is_float ? TOK___floatdisf : TOK___floatdidf;
+    } else if (source & VT_UNSIGNED) {
+        function = destination_is_float ? TOK___floatunsisf : TOK___floatunsidf;
+    } else {
+        function = destination_is_float ? TOK___floatsisf : TOK___floatsidf;
+    }
+    k16_call_float_helper(function, 1, t);
+}
+
+ST_FUNC void gen_cvt_ftof(int t)
+{
+    int source = vtop->type.t & VT_BTYPE;
+    int destination = t & VT_BTYPE;
+
+    if (source == destination ||
+        (source != VT_FLOAT && destination != VT_FLOAT)) {
+        gv(RC_FLOAT);
+        return;
+    }
+    k16_call_float_helper(
+        source == VT_FLOAT ? TOK___extendsfdf2 : TOK___truncdfsf2,
+        1,
+        t);
+}
 
 ST_FUNC void gen_va_start(void)
 {
